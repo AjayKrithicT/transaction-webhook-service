@@ -1,3 +1,6 @@
+
+from pathlib import Path
+
 import pytest
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import (
@@ -32,18 +35,26 @@ TestSessionLocal = async_sessionmaker(
 )
 
 
-# Make worker operations use the test database rather than
-# the application's normal database.
+# Make worker operations use the test database.
 processor.SessionLocal = TestSessionLocal
 
 
 @pytest.fixture(scope="session", autouse=True)
 async def setup_test_database():
-    """Create the test schema before tests and remove it afterward."""
+    """Create the test schema and install the database function."""
 
     async with test_engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
+
+        function_path = (
+            Path(__file__).resolve().parents[1]
+            / "database"
+            / "accept_transaction_webhook.sql"
+        )
+        function_sql = function_path.read_text(encoding="utf-8")
+
+        await connection.exec_driver_sql(function_sql)
 
     yield
 
