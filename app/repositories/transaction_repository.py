@@ -25,7 +25,7 @@ async def create_transaction(
 ) -> tuple[Transaction, bool]:
     """Create a transaction and its processing job if it is new."""
 
-    # 1. Measure the INSERT operation.
+    # INSERT the transaction and return its fields if newly created.
     insert_started = perf_counter()
 
     statement = (
@@ -41,79 +41,67 @@ async def create_transaction(
         .on_conflict_do_nothing(
             index_elements=[Transaction.transaction_id]
         )
-        .returning(Transaction.transaction_id)
+        .returning(Transaction)
     )
 
     result = await db.execute(statement)
-    created_id = result.scalar_one_or_none()
+    transaction = result.scalar_one_or_none()
 
     insert_ms = (perf_counter() - insert_started) * 1000
+    logger.info("DB INSERT duration: %.2f ms", insert_ms)
 
-    logger.info(
-        "DB INSERT duration: %.2f ms",
-        insert_ms,
-    )
-
-    if created_id is not None:
-        # Only a newly created transaction gets a processing job.
+    if transaction is not None:
+        # New transaction: create its job in the same database transaction.
         db.add(
             ProcessingJob(
-                transaction_id=created_id,
+                transaction_id=transaction.transaction_id,
                 status=JobStatus.PENDING.value,
             )
         )
         created = True
+
     else:
+        # Existing transaction: fetch it and validate idempotency.
+        select_started = perf_counter()
+
+        result = await db.execute(
+            select(Transaction).where(
+                Transaction.transaction_id == payload.transaction_id
+            )
+        )
+        transaction = result.scalar_one()
+
+        select_ms = (perf_counter() - select_started) * 1000
+        logger.info("DB SELECT duration: %.2f ms", select_ms)
+
+        payload_matches = (
+            transaction.source_account == payload.source_account
+            and transaction.destination_account
+            == payload.destination_account
+            and transaction.amount == payload.amount
+            and transaction.currency == payload.currency
+        )
+
+        if not payload_matches:
+            await db.rollback()
+            raise IdempotencyConflictError(
+                "Transaction ID already exists with a different payload."
+            )
+
         created = False
 
-    # 2. Measure the transaction lookup.
-    select_started = perf_counter()
-
-    result = await db.execute(
-        select(Transaction).where(
-            Transaction.transaction_id == payload.transaction_id
-        )
-    )
-    transaction = result.scalar_one()
-
-    select_ms = (perf_counter() - select_started) * 1000
-
-    logger.info(
-        "DB SELECT duration: %.2f ms",
-        select_ms,
-    )
-
-    # Reusing an ID is allowed only when all original fields match.
-    payload_matches = (
-        transaction.source_account == payload.source_account
-        and transaction.destination_account == payload.destination_account
-        and transaction.amount == payload.amount
-        and transaction.currency == payload.currency
-    )
-
-    if not payload_matches:
-        await db.rollback()
-
-        raise IdempotencyConflictError(
-            "Transaction ID already exists with a different payload."
-        )
-
-    # 3. Measure the commit, which also persists a newly added job.
+    # Commit the transaction and any newly created processing job.
     commit_started = perf_counter()
-
     await db.commit()
 
     commit_ms = (perf_counter() - commit_started) * 1000
+    logger.info("DB COMMIT duration: %.2f ms", commit_ms)
 
-    logger.info(
-        "DB COMMIT duration: %.2f ms",
-        commit_ms,
-    )
+    total_ms = insert_ms + commit_ms
+    if not created:
+        total_ms += select_ms
 
-    logger.info(
-        "DB operations total: %.2f ms",
-        insert_ms + select_ms + commit_ms,
-    )
+    logger.info("DB operations total: %.2f ms", total_ms)
 
     return transaction, created
 
