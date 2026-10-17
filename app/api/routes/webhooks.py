@@ -1,3 +1,7 @@
+
+import logging
+from time import perf_counter
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +15,8 @@ from app.schemas.transaction import (
 )
 from app.services.transaction_service import accept_transaction
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/v1/webhooks",
@@ -29,16 +35,33 @@ async def receive_transaction_webhook(
 ) -> TransactionWebhookResponse:
     """Accept a transaction for asynchronous processing."""
 
+    started_at = perf_counter()
+
     try:
         transaction_id, transaction_status, created = (
             await accept_transaction(db, payload)
         )
 
     except IdempotencyConflictError as exc:
+        elapsed_ms = (perf_counter() - started_at) * 1000
+
+        logger.info(
+            "Webhook rejected due to idempotency conflict; "
+            "handler time: %.2f ms",
+            elapsed_ms,
+        )
+
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
+
+    elapsed_ms = (perf_counter() - started_at) * 1000
+
+    logger.info(
+        "Webhook handler completed in %.2f ms",
+        elapsed_ms,
+    )
 
     return TransactionWebhookResponse(
         transaction_id=transaction_id,
