@@ -16,15 +16,17 @@ class IdempotencyConflictError(Exception):
     """Raised when a transaction ID is reused with a different payload."""
 
 
+
 async def create_transaction(
     db: AsyncSession,
     payload: TransactionWebhookRequest,
 ) -> tuple[Transaction, bool]:
     """Accept a transaction using one database function call."""
 
-    started_at = perf_counter()
-
     try:
+        # Measure the database function call separately.
+        query_started = perf_counter()
+
         result = await db.execute(
             text("""
                 SELECT *
@@ -47,18 +49,24 @@ async def create_transaction(
 
         row = result.mappings().one()
 
+        query_ms = (perf_counter() - query_started) * 1000
+
         if row["result_conflict"]:
             await db.rollback()
             raise IdempotencyConflictError(
                 "Transaction ID already exists with a different payload."
             )
 
+        # Measure the commit separately.
+        commit_started = perf_counter()
         await db.commit()
+        commit_ms = (perf_counter() - commit_started) * 1000
 
-        elapsed_ms = (perf_counter() - started_at) * 1000
         logger.info(
-            "Database acceptance call and commit: %.2f ms",
-            elapsed_ms,
+            "DB function execution: %.2f ms | DB commit: %.2f ms | Total: %.2f ms",
+            query_ms,
+            commit_ms,
+            query_ms + commit_ms,
         )
 
         transaction = Transaction(
@@ -77,7 +85,6 @@ async def create_transaction(
     except Exception:
         await db.rollback()
         raise
-
 
 async def get_transaction(
     db: AsyncSession,
