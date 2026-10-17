@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local environment overrides
+.env.*
+!.env.example
+
+# Build and coverage artifacts
+htmlcov/

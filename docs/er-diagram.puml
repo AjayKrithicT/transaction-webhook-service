@@ -1,0 +1,35 @@
+
+@startuml
+hide circle
+skinparam linetype ortho
+
+entity "transactions" as transactions {
+  * transaction_id : VARCHAR <<PK>>
+  --
+  source_account : VARCHAR
+  destination_account : VARCHAR
+  amount : NUMERIC(18,2)
+  currency : CHAR(3)
+  status : VARCHAR
+  received_at : TIMESTAMPTZ
+  processed_at : TIMESTAMPTZ NULL
+}
+
+entity "processing_jobs" as jobs {
+  * id : BIGINT <<PK>>
+  --
+  transaction_id : VARCHAR <<FK, UQ>>
+  status : VARCHAR
+  attempts : INTEGER
+  max_attempts : INTEGER
+  available_at : TIMESTAMPTZ
+  locked_until : TIMESTAMPTZ NULL
+  locked_by : VARCHAR NULL
+  last_error : TEXT NULL
+  created_at : TIMESTAMPTZ
+  updated_at : TIMESTAMPTZ
+}
+
+transactions ||--o| jobs : has
+
+@enduml
