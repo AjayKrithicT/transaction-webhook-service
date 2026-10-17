@@ -16,7 +16,10 @@ from app.schemas.transaction import (
 from app.services.transaction_service import accept_transaction
 
 
-logger = logging.getLogger(__name__)
+# Configure INFO-level logging so timing messages can be displayed.
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger()
+
 
 router = APIRouter(
     prefix="/v1/webhooks",
